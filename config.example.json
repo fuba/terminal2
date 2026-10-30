@@ -10,6 +10,15 @@
   "background": "#17191E",
   "optionAsMeta": false,
   "useMetal": true,
+  "localShells": ["/bin/zsh", "/bin/bash"],
+  "keyBindings": {
+    "previousTab": { "key": "left", "modifiers": ["command"] },
+    "nextTab": { "key": "right", "modifiers": ["command"] },
+    "metaLeft": { "key": "left", "modifiers": ["option"] },
+    "metaRight": { "key": "right", "modifiers": ["option"] },
+    "fitHeight": { "key": "", "modifiers": [] }
+  },
+  "ansiColors": [],
   "hotkey": { "enabled": true, "modifiers": ["option", "shift"], "key": "v" },
   "sshProfiles": [
     { "name": "Example", "host": "example.com", "user": "me", "port": 22, "identityFile": "~/.ssh/id_ed25519" }

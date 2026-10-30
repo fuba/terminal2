@@ -10,13 +10,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSTo
     private var adjustingFrame = false
     private var screensObserver: NSObjectProtocol?
     private let toolbarID = NSToolbar.Identifier("TerminalToolbar")
+    private(set) var connectionPanel: NSPanel?
+    private var panelHostingView: NSView?
+    private var frameBeforeSidebar: NSRect?
+    private var fittedSidebarFrame: NSRect?
 
     init(workspace: Workspace) {
         self.workspace = workspace
         let config = workspace.configuration
-        let width = max(800, Double(config.columns) * config.fontSize * 0.61 + 240)
+        let width = max(800, Double(config.columns) * config.fontSize * 0.61 + 24)
         let height = max(480, Double(config.rows) * config.fontSize * 1.25 + 100)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
         workspace.windowController = self
         window.delegate = self
@@ -46,7 +50,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSTo
         guard let window else { return }
         window.isOpaque = workspace.configuration.opacity == 1
         window.backgroundColor = window.isOpaque ? NSColor(hex: workspace.configuration.background) : .clear
-        window.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = NSAppearance(named: NSColor(hex: workspace.configuration.background).isLight ? .aqua : .darkAqua)
+        connectionPanel?.appearance = window.appearance
     }
     func resizeToGrid() {
         guard let window, let session = workspace.selected else { return }
@@ -105,11 +110,78 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSTo
         adjustingFrame = true
         if docked { snapHeight() } else { window.setFrame(fit(window.frame), display: true) }
         adjustingFrame = false
+        positionSidebar()
     }
-    func windowDidMove(_ notification: Notification) { savePosition() }
-    func windowDidResize(_ notification: Notification) { savePosition() }
-    func windowDidChangeScreen(_ notification: Notification) { if docked { snapHeight() }; savePosition() }
+    func windowDidMove(_ notification: Notification) { positionSidebar(); savePosition() }
+    func windowDidResize(_ notification: Notification) { positionSidebar(); savePosition() }
+    func windowDidChangeScreen(_ notification: Notification) { if docked { snapHeight() }; positionSidebar(); savePosition() }
     func windowShouldClose(_ sender: NSWindow) -> Bool { sender.orderOut(nil); return false }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        if workspace.sidebarVisible { workspace.sidebarVisible = false }
+    }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        if workspace.sidebarVisible { setSidebarVisible(true) }
+    }
+
+    func setSidebarVisible(_ visible: Bool) {
+        guard let window else { return }
+        if !visible {
+            connectionPanel?.orderOut(nil)
+            if let before = frameBeforeSidebar, let fitted = fittedSidebarFrame, window.frame == fitted {
+                adjustingFrame = true; window.setFrame(before, display: true); adjustingFrame = false
+            }
+            frameBeforeSidebar = nil; fittedSidebarFrame = nil
+            window.makeKeyAndOrderFront(nil); workspace.focusSelected()
+            return
+        }
+        if window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil); return }
+        if connectionPanel == nil {
+            let panel = ConnectionPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.title = "接続"
+            panel.isReleasedWhenClosed = false; panel.isFloatingPanel = false; panel.hidesOnDeactivate = false
+            panel.backgroundColor = .clear; panel.isOpaque = false; panel.hasShadow = true
+            panel.collectionBehavior = [.fullScreenAuxiliary]
+            let effect = NSVisualEffectView()
+            effect.material = .sidebar; effect.blendingMode = .behindWindow; effect.state = .active
+            effect.wantsLayer = true; effect.layer?.cornerRadius = 12; effect.layer?.masksToBounds = true
+            let hosting = NSHostingView(rootView: ConnectionSidebar(workspace: workspace))
+            hosting.sizingOptions = []; hosting.frame = effect.bounds; hosting.autoresizingMask = [.width, .height]
+            effect.addSubview(hosting); panel.contentView = effect
+            panelHostingView = hosting
+            panel.appearance = window.appearance
+            connectionPanel = panel
+            window.addChildWindow(panel, ordered: .below)
+        }
+        frameBeforeSidebar = window.frame
+        positionSidebar()
+        guard let panel = connectionPanel else { return }
+        let frame = panel.frame
+        let offset: CGFloat = frame.midX < window.frame.midX ? 18 : -18
+        // Keep window geometry final even when the window server pauses animations.
+        // Animate only clipped contents so the panel can never cross the terminal surface.
+        panelHostingView?.setFrameOrigin(NSPoint(x: offset, y: 0))
+        panel.alphaValue = 0; panel.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.16
+            panel.animator().alphaValue = 1
+            panelHostingView?.animator().setFrameOrigin(.zero)
+        }
+        workspace.focusSelected()
+    }
+
+    private func positionSidebar() {
+        guard !adjustingFrame, workspace.sidebarVisible, let window, let panel = connectionPanel,
+              let screen = window.screen ?? NSScreen.main else { return }
+        adjustingFrame = true
+        defer { adjustingFrame = false }
+        let layout = SidebarGeometry.layout(terminal: window.frame, visible: screen.visibleFrame)
+        if layout.terminal != window.frame {
+            if frameBeforeSidebar == nil { frameBeforeSidebar = window.frame }
+            window.setFrame(layout.terminal, display: true)
+            fittedSidebarFrame = layout.terminal
+        }
+        panel.setFrame(layout.sidebar, display: true)
+    }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -135,4 +207,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSTo
     @objc private func find() { workspace.showingSearch.toggle() }
     @objc private func newTab() { workspace.open() }
     @objc private func settings() { (NSApp.delegate as? AppDelegate)?.showSettings(nil) }
+}
+
+private final class ConnectionPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }

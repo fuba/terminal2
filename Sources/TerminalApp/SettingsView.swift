@@ -8,8 +8,15 @@ struct SettingsView: View {
         TabView {
             Form {
                 Section("文字") {
-                    TextField("フォント", text: $workspace.configuration.fontFamily)
-                    Stepper("サイズ  \(Int(workspace.configuration.fontSize)) pt", value: $workspace.configuration.fontSize, in: 8...48)
+                    HStack {
+                        Button("フォントを選択…") { (NSApp.delegate as? AppDelegate)?.showFonts() }
+                        Spacer()
+                        Text(fontDescription).multilineTextAlignment(.trailing).textSelection(.enabled)
+                    }
+                    Picker("配色", selection: themeBinding) {
+                        ForEach(TerminalTheme.all) { Text($0.name).tag($0.id) }
+                        Text("カスタム").tag("custom")
+                    }
                     ColorPicker("文字色", selection: color(\.foreground), supportsOpacity: false)
                     ColorPicker("背景色", selection: color(\.background), supportsOpacity: false)
                     Toggle("Metal で描画", isOn: $workspace.configuration.useMetal)
@@ -34,31 +41,25 @@ struct SettingsView: View {
             Form {
                 Section("シェル") {
                     Picker("標準シェル", selection: $workspace.configuration.shell) {
-                        ForEach(Array(Set(workspace.shells + [workspace.configuration.shell])).sorted(), id: \.self) { Text($0).tag($0) }
+                        ForEach(Array(Set(workspace.availableShells + workspace.shells + [workspace.configuration.shell])).sorted(), id: \.self) { Text($0).tag($0) }
                     }
                     Toggle("Option を Meta として送信", isOn: $workspace.configuration.optionAsMeta)
                 }
-                Section("グローバルホットキー") {
-                    Toggle("ウィンドウを表示 / 非表示", isOn: $workspace.configuration.hotkey.enabled)
-                    HStack {
-                        ForEach(["control", "option", "shift", "command"], id: \.self) { modifier in
-                            Toggle(symbol(modifier), isOn: modifierBinding(modifier)).toggleStyle(.button)
+                Section("シェル一覧") {
+                    ForEach(workspace.configuration.localShells, id: \.self) { path in
+                        HStack {
+                            Text(path).textSelection(.enabled); Spacer()
+                            Button("削除") { workspace.configuration.localShells.removeAll { $0 == path } }
                         }
-                        Picker("キー", selection: $workspace.configuration.hotkey.key) {
-                            ForEach(Array("abcdefghijklmnopqrstuvwxyz0123456789").map(String.init) + ["grave", "space", "tab"] + (1...12).map { "f\($0)" }, id: \.self) { Text($0.uppercased()).tag($0) }
-                        }.labelsHidden().frame(width: 95)
                     }
-                }
-                Section("ショートカット") {
-                    shortcut("新しいタブ / 閉じる", "⌘T / ⌘W")
-                    shortcut("接続先を選ぶ / SSH 接続", "⌘K / ⌘⇧S")
-                    shortcut("次 / 前のタブ", "⌘⇧] / ⌘⇧[")
-                    shortcut("検索 / ログ", "⌘F / ⌘L")
-                    shortcut("画面の高さに合わせる", "F11")
+                    Button("シェルを追加…") { workspace.addShell() }
                 }
             }
             .formStyle(.grouped)
             .tabItem { Label("操作", systemImage: "keyboard") }
+
+            KeyboardSettings(workspace: workspace)
+                .tabItem { Label("キー割り当て", systemImage: "command") }
 
             Form {
                 Section("SSH 接続先") {
@@ -86,32 +87,72 @@ struct SettingsView: View {
                     }
                 }
                 Section("ファイル") {
-                    Button("設定ファイルを開く…") { NSWorkspace.shared.open(AppPaths.config) }
+                    Button("設定ファイルを開く…") { NSWorkspace.shared.open(workspace.configurationURL) }
                     Button("ログフォルダを開く…") { NSWorkspace.shared.open(AppPaths.logs) }
                 }
             }
             .formStyle(.grouped)
             .tabItem { Label("接続", systemImage: "network") }
         }
-        .frame(width: 580, height: 620)
+        .frame(width: 650, height: 660)
         .padding(8)
     }
-    private func shortcut(_ title: String, _ key: String) -> some View {
-        HStack { Text(title); Spacer(); Text(key).foregroundStyle(.secondary).monospaced() }
+    private var fontDescription: String {
+        let font = NSFont(name: workspace.configuration.fontFamily, size: workspace.configuration.fontSize)
+        return "\(font?.displayName ?? workspace.configuration.fontFamily)  \(Int(workspace.configuration.fontSize)) pt"
     }
-    private func symbol(_ value: String) -> String {
-        ["control": "⌃", "option": "⌥", "shift": "⇧", "command": "⌘"][value] ?? value
-    }
-    private func modifierBinding(_ modifier: String) -> Binding<Bool> {
-        Binding(get: { workspace.configuration.hotkey.modifiers.contains(modifier) }, set: { enabled in
-            var modifiers = workspace.configuration.hotkey.modifiers
-            if enabled { modifiers.append(modifier) } else { modifiers.removeAll { $0 == modifier } }
-            workspace.configuration.hotkey.modifiers = modifiers
+    private var themeBinding: Binding<String> {
+        Binding(get: { TerminalTheme.matching(workspace.configuration)?.id ?? "custom" }, set: { id in
+            guard let theme = TerminalTheme.all.first(where: { $0.id == id }) else { return }
+            var config = workspace.configuration; theme.apply(to: &config); workspace.configuration = config
         })
     }
     private func color(_ path: WritableKeyPath<Configuration, String>) -> Binding<Color> {
         Binding(get: { Color(nsColor: NSColor(hex: workspace.configuration[keyPath: path])) }, set: {
             workspace.configuration[keyPath: path] = NSColor($0).hex
         })
+    }
+}
+
+struct KeyboardSettings: View {
+    @ObservedObject var workspace: Workspace
+    @State private var query = ""
+    var body: some View {
+        VStack(spacing: 0) {
+            TextField("操作を検索", text: $query).textFieldStyle(.roundedBorder).padding(12)
+            Form {
+                Section("グローバルホットキー") {
+                    HStack {
+                        Toggle("表示 / 非表示", isOn: Binding(get: { workspace.configuration.hotkey.enabled }, set: { enabled in
+                            var config = workspace.configuration
+                            config.assignGlobal(KeyChord(key: config.hotkey.key, modifiers: config.hotkey.modifiers), enabled: enabled)
+                            workspace.configuration = config
+                        }))
+                        ShortcutRecorder(binding: KeyChord(key: workspace.configuration.hotkey.key, modifiers: workspace.configuration.hotkey.modifiers), requiresModifier: true) { chord in
+                            var config = workspace.configuration
+                            config.assignGlobal(chord, enabled: config.hotkey.enabled)
+                            workspace.configuration = config
+                        }.frame(width: 165)
+                    }
+                }
+                Section("アプリと端末") {
+                    ForEach(ShortcutAction.allCases.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }) { action in
+                        HStack(spacing: 8) {
+                            Text(action.title).lineLimit(nil)
+                            Spacer(minLength: 8)
+                            ShortcutRecorder(binding: workspace.configuration.binding(for: action)) { workspace.assignShortcut($0, to: action) }
+                                .frame(width: 165)
+                            Button { workspace.assignShortcut(.unbound, to: action) } label: { Image(systemName: "xmark").frame(width: 22, height: 22) }
+                                .buttonStyle(.plain).foregroundStyle(.secondary).help("割り当てを解除")
+                        }
+                    }
+                }
+                Section {
+                    Button("キー割り当てを既定値に戻す") {
+                        var config = workspace.configuration; config.keyBindings = [:]; config.hotkey = HotkeyConfiguration(); workspace.configuration = config
+                    }
+                }
+            }.formStyle(.grouped)
+        }
     }
 }

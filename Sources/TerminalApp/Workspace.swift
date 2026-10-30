@@ -12,19 +12,24 @@ final class Workspace: ObservableObject {
     @Published var sshProfiles: [SSHProfile] = []
     @Published var peers: [TailscalePeer] = []
     @Published var discoveryError: String?
-    @Published var sidebarVisible = true
+    @Published var sidebarVisible = false {
+        didSet { windowController?.setSidebarVisible(sidebarVisible) }
+    }
     @Published var showingConnect = false
     @Published var showingBookmark = false
     @Published var showingPicker = false
     @Published var showingSearch = false
     @Published var error: String?
-    let shells = Shell.available()
+    let availableShells = Shell.available()
+    var shells: [String] { configuration.localShells.filter { FileManager.default.isExecutableFile(atPath: $0) } }
+    var searchHandler: ((Bool) -> Void)?
     weak var windowController: TerminalWindowController?
     var onConfigurationChanged: (() -> Void)?
     private var configurationData: Data?
     private var watchTimer: Timer?
     private var applyingExternal = false
     private var refreshing = false
+    let configurationURL: URL
 
     var selected: TerminalSession? { sessions.first { $0.id == selectedID } }
     var targets: [LaunchTarget] {
@@ -35,12 +40,13 @@ final class Workspace: ObservableObject {
         } + sshProfiles.map(LaunchTarget.ssh) + peers.map { .ssh(SSHProfile(name: $0.name, host: $0.host)) }
     }
 
-    init() {
+    init(configurationURL: URL = AppPaths.config) {
+        self.configurationURL = configurationURL
         do {
             try AppPaths.prepare()
-            configuration = try AppPaths.load()
-            if !FileManager.default.fileExists(atPath: AppPaths.config.path) { try AppPaths.save(configuration) }
-            configurationData = try Data(contentsOf: AppPaths.config)
+            configuration = try AppPaths.load(from: configurationURL)
+            if !FileManager.default.fileExists(atPath: configurationURL.path) { try AppPaths.save(configuration, to: configurationURL) }
+            configurationData = try Data(contentsOf: configurationURL)
         } catch { self.error = "設定を読み込めませんでした。\n" + error.localizedDescription }
         reloadSSH()
         watchTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -53,8 +59,8 @@ final class Workspace: ObservableObject {
         do {
             _ = try configuration.validated()
             if !applyingExternal {
-                try AppPaths.save(configuration)
-                configurationData = try Data(contentsOf: AppPaths.config)
+                try AppPaths.save(configuration, to: configurationURL)
+                configurationData = try Data(contentsOf: configurationURL)
             }
             sessions.forEach { $0.apply(configuration) }
             reloadSSH()
@@ -63,10 +69,10 @@ final class Workspace: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
     func reloadConfiguration() {
-        guard let data = try? Data(contentsOf: AppPaths.config), data != configurationData else { return }
+        guard let data = try? Data(contentsOf: configurationURL), data != configurationData else { return }
         configurationData = data
         do {
-            let next = try AppPaths.load()
+            let next = try AppPaths.load(from: configurationURL)
             applyingExternal = true
             configuration = next
             applyingExternal = false
@@ -125,6 +131,20 @@ final class Workspace: ObservableObject {
             configuration.sshProfiles.append(profile)
             if connect { open(.ssh(profile)) }
         } catch { self.error = error.localizedDescription }
+    }
+    func assignShortcut(_ chord: KeyChord, to action: ShortcutAction) {
+        var config = configuration
+        config.assign(chord, to: action)
+        configuration = config
+    }
+    func addShell() {
+        let panel = NSOpenPanel()
+        panel.title = "シェルを追加"
+        panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/bin")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard FileManager.default.isExecutableFile(atPath: url.path) else { error = "実行可能なシェルを選択してください。"; return }
+        if !configuration.localShells.contains(url.path) { configuration.localShells.append(url.path) }
     }
     func shutdown() { watchTimer?.invalidate(); sessions.forEach { $0.close() } }
 }

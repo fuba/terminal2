@@ -21,7 +21,7 @@
 | グローバルホットキー | Carbon RegisterEventHotKey、既定 ⌥⇧V、キー / 修飾キー変更 | GlobalHotkey |
 | モニターごとの位置記憶 / 切断時復帰 | NSScreen ID ごとの保存、可視領域へのクランプ | TerminalWindowController |
 | ビルド日時表示 | ビルド生成の CFBundleVersion をタイトルへ表示 | build.sh、SessionPane |
-| F11 の高さドック / ディスプレイ変更追従 | visibleFrame の高さ、元のフレーム復元、画面変更通知 | TerminalWindowController |
+| 高さドック / ディスプレイ変更追従 | visibleFrame の高さ、元のフレーム復元、画面変更通知。F11 の既定割り当てはユーザーの指示で撤去 | TerminalWindowController |
 | ライブ設定 / 色選択 / 不透明度 / 行列 | SwiftUI Form、NSColorPanel、背景だけの不透明度、行列指定でリサイズ、JSON の自動反映 | SettingsView、Workspace |
 | タブごとのログ | UTF-8 を保持した ANSI / OSC / DCS 除去、開始・停止、private ログファイル | SessionLog、EscapeFilter |
 | クラッシュログ | NSException と fatal signal、macOS DiagnosticReports | Diagnostics |
