@@ -1,0 +1,16 @@
+{
+  "swiftterm": {
+    "version": "1.99.1",
+    "revision": "2f573f73af5e768d90847dce20c97fa9535d7164",
+    "publishedAt": "2026-10-21T01:08:40Z",
+    "release": "https://github.com/migueldeicaza/SwiftTerm/releases/tag/v1.99.1",
+    "review": "Reviewed package manifest, build-info plugin/generator, native PTY lifecycle, clipboard/link policy hooks and graphics media defaults. PortableGraphics disabled. No dependency install scripts. MIT."
+  },
+  "swift-argument-parser": {
+    "version": "1.8.2",
+    "revision": "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+    "publishedAt": "2026-06-04T19:03:28Z",
+    "release": "https://github.com/apple/swift-argument-parser/releases/tag/1.8.2",
+    "review": "SwiftTerm command-line product dependency; resolved but not linked into Terminal2. Reviewed manifest; no executable plugin in this build. Apache-2.0 with Swift exception."
+  }
+}

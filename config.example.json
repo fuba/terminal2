@@ -1,0 +1,22 @@
+{
+  "shell": "/bin/zsh",
+  "fontFamily": "SFMono-Regular",
+  "fontSize": 15,
+  "scrollback": 10000,
+  "columns": 120,
+  "rows": 32,
+  "opacity": 1,
+  "foreground": "#E2E4E9",
+  "background": "#17191E",
+  "optionAsMeta": false,
+  "useMetal": true,
+  "hotkey": { "enabled": true, "modifiers": ["option", "shift"], "key": "v" },
+  "sshProfiles": [
+    { "name": "Example", "host": "example.com", "user": "me", "port": 22, "identityFile": "~/.ssh/id_ed25519" }
+  ],
+  "bookmarks": [
+    { "name": "Project", "command": "cd ~/Projects && exec /bin/zsh -l" },
+    { "name": "Server", "ssh": "Example" }
+  ],
+  "favorites": []
+}
