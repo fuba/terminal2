@@ -92,6 +92,11 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, TerminalV
         terminal.caretColor = NSColor(hex: configuration.foreground)
         terminal.selectedTextBackgroundColor = .init(srgbRed: 0.32, green: 0.38, blue: 0.49, alpha: 0.65)
         terminal.optionAsMetaKey = configuration.optionAsMeta
+        let palette = configuration.ansiColors.isEmpty ? TerminalTheme.dark.ansi : configuration.ansiColors
+        terminal.installColors(palette.map { hex in
+            let value = UInt32(hex.dropFirst(), radix: 16) ?? 0
+            return SwiftTerm.Color(red8: UInt16(value >> 16 & 255), green8: UInt16(value >> 8 & 255), blue8: UInt16(value & 255))
+        })
         terminal.changeScrollback(configuration.scrollback)
         terminal.minimumContrastRatio = 1.2
         if terminal.window != nil {
@@ -177,6 +182,28 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, TerminalV
         if recording { logger = nil; recording = false; return }
         do { logger = try SessionLog(id: id); recording = true }
         catch { self.error = error.localizedDescription }
+    }
+
+    @discardableResult
+    func performTerminalAction(_ action: ShortcutAction) -> Bool {
+        if let sequence = action.terminalSequence {
+            guard !terminal.hasMarkedText() else { return false }
+            terminal.send(txt: sequence)
+            return true
+        }
+        switch action {
+        case .copyOrInterrupt:
+            guard !terminal.hasMarkedText() else { return false }
+            if terminal.selectionActive { terminal.copy(terminal) }
+            else { terminal.send([0x03]) }
+        case .historyUp: terminal.pageUp()
+        case .historyDown: terminal.pageDown()
+        case .historyTop: terminal.scroll(toPosition: 0)
+        case .historyBottom: terminal.scroll(toPosition: 1)
+        case .clearHistory: terminal.clearScrollback()
+        default: return false
+        }
+        return true
     }
 
     func pasteClipboard() {
@@ -285,6 +312,10 @@ final class NativeTerminalView: TerminalView {
 }
 
 extension NSColor {
+    var isLight: Bool {
+        guard let color = usingColorSpace(.sRGB) else { return false }
+        return color.redComponent * 0.2126 + color.greenComponent * 0.7152 + color.blueComponent * 0.0722 > 0.5
+    }
     convenience init(hex: String) {
         let value = UInt32(hex.dropFirst(), radix: 16) ?? 0xE2E4E9
         self.init(srgbRed: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)

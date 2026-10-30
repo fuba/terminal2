@@ -6,21 +6,15 @@ import SwiftTerm
 struct WorkspaceView: View {
     @ObservedObject var workspace: Workspace
     var body: some View {
-        HSplitView {
-            if workspace.sidebarVisible {
-                ConnectionSidebar(workspace: workspace)
-                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 260)
+        VStack(spacing: 0) {
+            TabStrip(workspace: workspace)
+            if let session = workspace.selected {
+                SessionPane(session: session, workspace: workspace).id(session.id)
             }
-            VStack(spacing: 0) {
-                TabStrip(workspace: workspace)
-                if let session = workspace.selected {
-                    SessionPane(session: session, workspace: workspace).id(session.id)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .preferredColorScheme(.dark)
-        .onChange(of: workspace.sidebarVisible) { _, _ in workspace.focusSelected() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .preferredColorScheme(NSColor(hex: workspace.configuration.background).isLight ? .light : .dark)
         .sheet(isPresented: $workspace.showingConnect) { ConnectSheet(workspace: workspace) }
         .sheet(isPresented: $workspace.showingBookmark) { BookmarkSheet(workspace: workspace) }
         .sheet(isPresented: $workspace.showingPicker) { ConnectionPicker(workspace: workspace) }
@@ -38,7 +32,7 @@ struct TabStrip: View {
                 ScrollViewReader { proxy in
                     HStack(spacing: 4) {
                         ForEach(Array(workspace.sessions.enumerated()), id: \.element.id) { index, session in
-                            TabButton(session: session, number: index + 1, selected: workspace.selectedID == session.id,
+                            TabButton(session: session, shortcut: index < 9 ? workspace.configuration.binding(for: ShortcutAction(rawValue: "selectTab\(index + 1)")!).display : "", selected: workspace.selectedID == session.id,
                                       select: { workspace.select(session.id) }, close: { workspace.close(session) })
                                 .id(session.id)
                         }
@@ -53,6 +47,7 @@ struct TabStrip: View {
                 ForEach(workspace.shells, id: \.self) { path in
                     Button(URL(fileURLWithPath: path).lastPathComponent) { workspace.open(.shell(path)) }
                 }
+                Button("シェルを追加…") { workspace.addShell() }
                 Divider()
                 Button("SSH 接続…", systemImage: "network") { workspace.showingConnect = true }
                 Button("接続を選ぶ…", systemImage: "list.bullet") { workspace.showingPicker = true }
@@ -66,7 +61,7 @@ struct TabStrip: View {
 
 struct TabButton: View {
     @ObservedObject var session: TerminalSession
-    let number: Int
+    let shortcut: String
     let selected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -77,7 +72,7 @@ struct TabButton: View {
                     Image(systemName: session.recording ? "record.circle.fill" : session.target.symbol)
                         .foregroundStyle(session.recording ? .red : (selected ? .primary : .secondary))
                     Text(session.title).lineLimit(2).multilineTextAlignment(.leading)
-                    if number < 10 { Text("⌘\(number)").font(.system(size: 11)).foregroundStyle(.tertiary) }
+                    if !shortcut.isEmpty && shortcut != "未割り当て" { Text(shortcut).font(.system(size: 12)).foregroundStyle(.tertiary) }
                 }.frame(minHeight: 26).contentShape(Rectangle())
             }.buttonStyle(.plain)
             Button(action: close) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).frame(width: 22, height: 24) }
@@ -99,54 +94,65 @@ struct TabButton: View {
 struct ConnectionSidebar: View {
     @ObservedObject var workspace: Workspace
     @State private var query = ""
+    @State private var hovered: String?
     private func matches(_ name: String) -> Bool { query.isEmpty || name.localizedCaseInsensitiveContains(query) }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                TextField("接続を検索", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                Button { Task { await workspace.refreshDiscovery() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("接続先を再読み込み")
-            }.padding(12)
-            List {
-                let favorites = workspace.targets.filter { workspace.configuration.favorites.contains($0.id) && matches($0.name) }
-                if !favorites.isEmpty {
-                    Section("お気に入り") { ForEach(unique(favorites)) { row($0, pinned: true) } }
-                }
-                Section("この Mac") {
-                    ForEach(workspace.shells.filter { matches($0) }, id: \.self) { row(.shell($0)) }
-                }
-                if !workspace.configuration.bookmarks.isEmpty {
-                    Section("ブックマーク") {
-                        ForEach(workspace.configuration.bookmarks.filter { matches($0.name) }) { bookmark in
-                            if let target = bookmarkTarget(bookmark) { row(target) }
-                        }
+            HStack(spacing: 7) {
+                TextField("接続を検索", text: $query).textFieldStyle(.roundedBorder)
+                Button { Task { await workspace.refreshDiscovery() } } label: { Image(systemName: "arrow.clockwise").frame(width: 22, height: 24) }
+                    .buttonStyle(.plain).help("再読み込み")
+                Button { workspace.sidebarVisible = false } label: { Image(systemName: "xmark").frame(width: 22, height: 24) }
+                    .buttonStyle(.plain).help("接続パネルを閉じる")
+            }.padding(10)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    let favorites = unique(workspace.targets.filter { workspace.configuration.favorites.contains($0.id) && matches($0.name) })
+                    if !favorites.isEmpty {
+                        heading("お気に入り")
+                        ForEach(favorites) { row($0, pinned: true) }
                     }
-                }
-                Section("SSH") {
+                    heading("SSH")
                     ForEach(workspace.sshProfiles.filter { matches($0.name) }) { row(.ssh($0)) }
-                    Button { workspace.showingConnect = true } label: { Label("接続を追加…", systemImage: "plus") }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
-                }
-                if !workspace.peers.isEmpty {
-                    Section("Tailscale") {
+                    Button { workspace.showingConnect = true } label: { Label("接続を追加…", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3) }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 8)
+                    if !workspace.peers.isEmpty {
+                        heading("Tailscale")
                         ForEach(workspace.peers.filter { matches($0.name) }) { peer in
                             row(.ssh(SSHProfile(name: peer.name, host: peer.host)), online: peer.online)
                         }
                     }
-                }
+                    let bookmarks = workspace.configuration.bookmarks.filter { matches($0.name) }
+                    if !bookmarks.isEmpty {
+                        heading("ブックマーク")
+                        ForEach(bookmarks) { bookmark in
+                            if let target = bookmarkTarget(bookmark) { row(target) }
+                        }
+                    }
+                    heading("シェル")
+                    ForEach(workspace.shells.filter { matches($0) }, id: \.self) { row(.shell($0)) }
+                    Menu {
+                        ForEach(workspace.availableShells.filter { !workspace.configuration.localShells.contains($0) }, id: \.self) { path in
+                            Button(path) { workspace.configuration.localShells.append(path) }
+                        }
+                        Button("ファイルから追加…") { workspace.addShell() }
+                    } label: { Label("シェルを追加…", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading) }
+                        .menuStyle(.borderlessButton).padding(.horizontal, 8).padding(.vertical, 4)
+                }.padding(.horizontal, 8).padding(.bottom, 10)
             }
-            .listStyle(.sidebar)
             if let error = workspace.discoveryError {
-                Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.secondary).padding(12).textSelection(.enabled)
+                Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.secondary).padding(10).textSelection(.enabled)
             }
             HStack {
                 Button { workspace.showingBookmark = true } label: { Label("ブックマーク", systemImage: "bookmark.badge.plus") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                 Spacer()
-            }.padding(12)
-        }
-        .background(.background.opacity(0.55))
+            }.padding(10)
+        }.font(.system(size: 13))
+    }
+    private func heading(_ title: String) -> some View {
+        Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+            .padding(.top, 10).padding(.bottom, 4).padding(.horizontal, 8)
     }
     private func unique(_ targets: [LaunchTarget]) -> [LaunchTarget] {
         var seen = Set<String>(); return targets.filter { seen.insert($0.id).inserted }
@@ -157,15 +163,20 @@ struct ConnectionSidebar: View {
         return nil
     }
     private func row(_ target: LaunchTarget, pinned: Bool = false, online: Bool? = nil) -> some View {
-        Button { workspace.open(target) } label: {
-            HStack(spacing: 9) {
-                Image(systemName: pinned ? "star.fill" : target.symbol).foregroundStyle(.secondary).frame(width: 16)
+        Button {
+            workspace.windowController?.window?.makeKeyAndOrderFront(nil)
+            workspace.open(target)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: pinned ? "star.fill" : target.symbol).foregroundStyle(.secondary).frame(width: 14)
                 Text(target.name).lineLimit(nil).multilineTextAlignment(.leading)
                 Spacer(minLength: 2)
                 if let online { Circle().fill(online ? Color.green : Color.secondary).frame(width: 6, height: 6).accessibilityLabel(online ? "オンライン" : "オフライン") }
-            }.padding(.vertical, 3).contentShape(Rectangle())
+            }.frame(minHeight: 24).padding(.horizontal, 8).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .background(hovered == target.id ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 5))
+        .onHover { hovered = $0 ? target.id : nil }
         .contextMenu {
             Button("新しいタブで開く") { workspace.open(target) }
             Button(workspace.configuration.favorites.contains(target.id) ? "お気に入りから外す" : "お気に入りに追加", systemImage: "star") { workspace.favorite(target) }
@@ -190,7 +201,7 @@ struct SessionPane: View {
     @ObservedObject var workspace: Workspace
     var body: some View {
         VStack(spacing: 0) {
-            if workspace.showingSearch { SearchBar(session: session, close: { workspace.showingSearch = false; workspace.focusSelected() }) }
+            if workspace.showingSearch { SearchBar(session: session, workspace: workspace, close: { workspace.showingSearch = false; workspace.focusSelected() }) }
             TerminalSurface(session: session, configuration: workspace.configuration)
                 .padding(.leading, 10).padding(.top, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -203,7 +214,7 @@ struct SessionPane: View {
                     Button("再接続") { workspace.open(session.target, directory: session.directory); workspace.close(session) }.buttonStyle(.link)
                 }
                 Button { session.toggleLog() } label: { Image(systemName: session.recording ? "record.circle.fill" : "record.circle").foregroundStyle(session.recording ? Color.red : .secondary) }
-                    .buttonStyle(.plain).help(session.recording ? "ログを停止 (⌘L)" : "ログを記録 (⌘L)")
+                    .buttonStyle(.plain).help((session.recording ? "ログを停止 " : "ログを記録 ") + workspace.configuration.binding(for: .toggleLog).display)
                 Text(session.metalActive ? "Metal" : "Core Graphics").foregroundStyle(.tertiary)
                 Text("\(session.columns) × \(session.rows)").monospacedDigit().foregroundStyle(.secondary)
             }
@@ -223,6 +234,7 @@ struct SessionPane: View {
 
 struct SearchBar: View {
     @ObservedObject var session: TerminalSession
+    @ObservedObject var workspace: Workspace
     let close: () -> Void
     @State private var query = ""
     @State private var summary = ""
@@ -231,7 +243,6 @@ struct SearchBar: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("端末内を検索", text: $query).textFieldStyle(.plain).focused($focused)
-                .onSubmit { find(backward: false) }
                 .onChange(of: query) { _, _ in find(backward: false) }
             Text(summary).foregroundStyle(.secondary).monospacedDigit()
             Button { find(backward: true) } label: { Image(systemName: "chevron.up") }.help("前の一致")
@@ -239,8 +250,8 @@ struct SearchBar: View {
             Button { session.terminal.clearSearch(); close() } label: { Image(systemName: "xmark") }.help("検索を閉じる")
         }
         .buttonStyle(.plain).padding(12).background(.bar)
-        .onAppear { focused = true }
-        .onExitCommand { session.terminal.clearSearch(); close() }
+        .onAppear { focused = true; workspace.searchHandler = { find(backward: $0) } }
+        .onDisappear { workspace.searchHandler = nil }
     }
     private func find(backward: Bool) {
         if query.isEmpty { session.terminal.clearSearch(); summary = ""; return }

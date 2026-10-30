@@ -12,13 +12,16 @@ public struct Configuration: Codable, Equatable {
     public var background = "#17191E"
     public var optionAsMeta = false
     public var useMetal = true
+    public var localShells = ["/bin/zsh", "/bin/bash"]
+    public var keyBindings: [String: KeyChord] = [:]
+    public var ansiColors: [String] = []
     public var hotkey = HotkeyConfiguration()
     public var sshProfiles: [SSHProfile] = []
     public var bookmarks: [Bookmark] = []
     public var favorites: [String] = []
 
     public init() {}
-    enum CodingKeys: String, CodingKey { case shell, fontFamily, fontSize, scrollback, columns, rows, opacity, foreground, background, optionAsMeta, useMetal, hotkey, sshProfiles, bookmarks, favorites }
+    enum CodingKeys: String, CodingKey { case shell, fontFamily, fontSize, scrollback, columns, rows, opacity, foreground, background, optionAsMeta, useMetal, hotkey, sshProfiles, bookmarks, favorites, localShells, keyBindings, ansiColors }
     public init(from decoder: Decoder) throws {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -33,6 +36,9 @@ public struct Configuration: Codable, Equatable {
         background = try c.decodeIfPresent(String.self, forKey: .background) ?? background
         optionAsMeta = try c.decodeIfPresent(Bool.self, forKey: .optionAsMeta) ?? optionAsMeta
         useMetal = try c.decodeIfPresent(Bool.self, forKey: .useMetal) ?? useMetal
+        localShells = try c.decodeIfPresent([String].self, forKey: .localShells) ?? localShells
+        keyBindings = try c.decodeIfPresent([String: KeyChord].self, forKey: .keyBindings) ?? [:]
+        ansiColors = try c.decodeIfPresent([String].self, forKey: .ansiColors) ?? []
         hotkey = try c.decodeIfPresent(HotkeyConfiguration.self, forKey: .hotkey) ?? hotkey
         sshProfiles = try c.decodeIfPresent([SSHProfile].self, forKey: .sshProfiles) ?? []
         bookmarks = try c.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
@@ -40,12 +46,35 @@ public struct Configuration: Codable, Equatable {
     }
 
     public func validated() throws -> Configuration {
-        guard (8...48).contains(fontSize), (80...1_000_000).contains(scrollback),
+        guard (8...128).contains(fontSize), (80...1_000_000).contains(scrollback),
               (40...500).contains(columns), (10...200).contains(rows), (0.35...1).contains(opacity),
               Self.isColor(foreground), Self.isColor(background), shell.hasPrefix("/"), !shell.contains("\0") else {
-            throw TerminalError.message("設定値が範囲外です。フォント 8〜48 pt、列 40〜500、行 10〜200、色 #RRGGBB を指定してください。")
+            throw TerminalError.message("設定値が範囲外です。フォント 8〜128 pt、列 40〜500、行 10〜200、色 #RRGGBB を指定してください。")
         }
         for profile in sshProfiles { try profile.validate() }
+        guard localShells.allSatisfy({ $0.hasPrefix("/") && !$0.contains("\0") }),
+              ansiColors.isEmpty || ansiColors.count == 16 && ansiColors.allSatisfy(Self.isColor) else {
+            throw TerminalError.message("シェルの絶対パスと、16 色の ANSI 配色を指定してください。")
+        }
+        for (name, chord) in keyBindings {
+            guard ShortcutAction(rawValue: name) != nil else { throw TerminalError.message("不明なキー操作です: \(name)") }
+            try chord.validate()
+        }
+        let global = KeyChord(key: hotkey.key, modifiers: hotkey.modifiers)
+        try global.validate()
+        guard !global.isEmpty, !hotkey.enabled || !global.modifiers.isEmpty else {
+            throw TerminalError.message("グローバルホットキーにはキーと修飾キーが必要です。")
+        }
+        if hotkey.enabled, ShortcutAction.allCases.contains(where: { binding(for: $0) == global }) {
+            throw TerminalError.message("グローバルホットキーとアプリのキー割り当てが重複しています。")
+        }
+        for context in ShortcutContext.allCases {
+            var occupied = Set<KeyChord>()
+            for action in ShortcutAction.allCases where action.allows(context) {
+                let chord = binding(for: action)
+                guard chord.isEmpty || occupied.insert(chord).inserted else { throw TerminalError.message("キーバインドが重複しています: \(chord.display)") }
+            }
+        }
         guard Set(sshProfiles.map(\.name)).count == sshProfiles.count,
               Set(bookmarks.map(\.name)).count == bookmarks.count else {
             throw TerminalError.message("SSH 接続先・ブックマークの名前は重複しないようにしてください。")

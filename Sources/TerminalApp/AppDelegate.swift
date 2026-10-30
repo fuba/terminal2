@@ -4,19 +4,21 @@ import Carbon
 import TerminalCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    let workspace = Workspace()
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+    let workspace = Workspace(configurationURL: ProcessInfo.processInfo.environment["TERMINAL2_CONFIG"].flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil } ?? AppPaths.config)
     private var terminalWindow: TerminalWindowController!
     private var settingsWindow: NSWindow?
     private let hotkey = GlobalHotkey()
     private var lastHotkey: HotkeyConfiguration?
     private var keyMonitor: Any?
     private var profilingTimer: Timer?
+    private var shortcutItems: [ShortcutAction: NSMenuItem] = [:]
+    private var recordingShortcut = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         terminalWindow = TerminalWindowController(workspace: workspace)
-        workspace.onConfigurationChanged = { [weak self] in self?.updateHotkey() }
+        workspace.onConfigurationChanged = { [weak self] in self?.configurationChanged() }
         hotkey.onPress = { [weak self] in self?.toggleWindow() }
         updateHotkey()
         profilingTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in Diagnostics.recordPerformance() }
@@ -30,12 +32,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return nil
             }
             guard event.type == .keyDown else { return event }
-            if self?.hotkey.matches(event) == true { self?.toggleWindow(); return nil }
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .control,
-                  event.charactersIgnoringModifiers == "c", let terminal = self?.workspace.selected?.terminal,
-                  NSApp.keyWindow?.firstResponder === terminal, terminal.selectionActive else { return event }
-            terminal.copy(terminal)
-            return nil
+            if let recorder = NSApp.keyWindow?.firstResponder as? ShortcutRecorderButton, recorder.recording {
+                recorder.capture(event); return nil
+            }
+            guard let self else { return event }
+            if self.hotkey.matches(event) { self.toggleWindow(); return nil }
+            let context = self.shortcutContext
+            if let action = ShortcutRouter.action(for: event, configuration: self.workspace.configuration, context: context), self.perform(action) { return nil }
+            // SwiftTerm has an internal Option-Command-O binding; the host owns all app shortcuts.
+            if context == .terminal, ShortcutRouter.chord(for: event) == KeyChord(key: "o", modifiers: ["option", "command"]) { return nil }
+            return event
         }
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
@@ -73,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
     private func updateHotkey() {
-        guard lastHotkey != workspace.configuration.hotkey else { return }
+        guard !recordingShortcut, lastHotkey != workspace.configuration.hotkey else { return }
         lastHotkey = workspace.configuration.hotkey
         do { try hotkey.register(workspace.configuration.hotkey) }
         catch { workspace.error = error.localizedDescription; Diagnostics.log("Hotkey: \(error)") }
@@ -99,87 +105,135 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
-    @objc private func newTab(_ sender: Any?) { terminalWindow.showWindow(nil); workspace.open() }
-    @objc private func closeTab(_ sender: Any?) {
-        if NSApp.keyWindow === settingsWindow { settingsWindow?.close(); return }
-        if let session = workspace.selected { workspace.close(session) }
+    private var shortcutContext: ShortcutContext {
+        if NSApp.keyWindow?.attachedSheet != nil || NSApp.modalWindow != nil { return .modal }
+        if NSApp.keyWindow === settingsWindow || NSApp.keyWindow === NSFontManager.shared.fontPanel(false) { return .settings }
+        if let terminal = workspace.selected?.terminal, NSApp.keyWindow?.firstResponder === terminal { return .terminal }
+        if NSApp.keyWindow === terminalWindow?.connectionPanel { return .connections }
+        if workspace.showingSearch && NSApp.keyWindow === terminalWindow?.window { return .search }
+        return NSApp.keyWindow === terminalWindow?.window ? .connections : .settings
     }
-    @objc private func nextTab(_ sender: Any?) { workspace.cycle(1) }
-    @objc private func previousTab(_ sender: Any?) { workspace.cycle(-1) }
-    @objc private func selectTab(_ sender: NSMenuItem) { if workspace.sessions.indices.contains(sender.tag) { workspace.select(workspace.sessions[sender.tag].id) } }
-    @objc private func connect(_ sender: Any?) { workspace.showingConnect = true; terminalWindow.showWindow(nil) }
-    @objc private func picker(_ sender: Any?) { workspace.showingPicker = true; terminalWindow.showWindow(nil) }
-    @objc private func toggleLog(_ sender: Any?) { workspace.selected?.toggleLog() }
-    @objc private func find(_ sender: Any?) { workspace.showingSearch = true }
-    @objc private func toggleSidebar(_ sender: Any?) { workspace.sidebarVisible.toggle() }
-    @objc private func dockHeight(_ sender: Any?) { terminalWindow.toggleHeight() }
-    @objc private func zoomIn(_ sender: Any?) { workspace.configuration.fontSize = min(48, workspace.configuration.fontSize + 1) }
-    @objc private func zoomOut(_ sender: Any?) { workspace.configuration.fontSize = max(8, workspace.configuration.fontSize - 1) }
-    @objc private func resetZoom(_ sender: Any?) { workspace.configuration.fontSize = 15 }
-    @objc private func historyUp(_ sender: Any?) { workspace.selected?.terminal.pageUp() }
-    @objc private func historyDown(_ sender: Any?) { workspace.selected?.terminal.pageDown() }
-    @objc private func historyTop(_ sender: Any?) { workspace.selected?.terminal.scroll(toPosition: 0) }
-    @objc private func historyBottom(_ sender: Any?) { workspace.selected?.terminal.scroll(toPosition: 1) }
-    @objc private func showLogs(_ sender: Any?) { NSWorkspace.shared.open(AppPaths.logs) }
-    @objc private func clearHistory(_ sender: Any?) { workspace.selected?.terminal.clearScrollback() }
-    @objc private func fullScreen(_ sender: Any?) { terminalWindow.window?.toggleFullScreen(sender) }
+
+    private func configurationChanged() {
+        updateHotkey()
+        for (action, item) in shortcutItems {
+            let chord = workspace.configuration.binding(for: action)
+            item.keyEquivalent = ShortcutRouter.menuEquivalent(chord)
+            item.keyEquivalentModifierMask = ShortcutRouter.modifiers(chord)
+        }
+        settingsWindow?.appearance = terminalWindow?.window?.appearance
+    }
+
+    func setRecordingShortcut(_ recording: Bool) {
+        recordingShortcut = recording
+        if recording {
+            var disabled = workspace.configuration.hotkey; disabled.enabled = false
+            try? hotkey.register(disabled)
+        } else { lastHotkey = nil; updateHotkey() }
+    }
+
+    @objc private func runCommand(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let action = ShortcutAction(rawValue: raw) else { return }
+        _ = perform(action)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard let raw = menuItem.representedObject as? String, let action = ShortcutAction(rawValue: raw) else { return true }
+        return action.allows(shortcutContext)
+    }
+
+    @discardableResult
+    func perform(_ action: ShortcutAction) -> Bool {
+        if let index = action.tabIndex {
+            if workspace.sessions.indices.contains(index) { workspace.select(workspace.sessions[index].id) }
+            return true
+        }
+        if workspace.selected?.performTerminalAction(action) == true { return true }
+        switch action {
+        case .newTab: terminalWindow.showWindow(nil); workspace.open()
+        case .closeTab:
+            if let key = NSApp.keyWindow, key !== terminalWindow.window, key !== terminalWindow.connectionPanel { key.close() }
+            else if let session = workspace.selected { workspace.close(session) }
+        case .nextTab: workspace.cycle(1)
+        case .previousTab: workspace.cycle(-1)
+        case .newSSH: terminalWindow.showWindow(nil); workspace.showingConnect = true
+        case .connectionPicker: terminalWindow.showWindow(nil); workspace.showingPicker = true
+        case .toggleSidebar: workspace.sidebarVisible.toggle()
+        case .find: workspace.showingSearch = true
+        case .searchNext: workspace.searchHandler?(false)
+        case .searchPrevious: workspace.searchHandler?(true)
+        case .closeSearch:
+            workspace.selected?.terminal.clearSearch(); workspace.showingSearch = false; workspace.focusSelected()
+        case .copy: return NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self)
+        case .paste: return NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self)
+        case .selectAll: return NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self)
+        case .toggleLog: workspace.selected?.toggleLog()
+        case .showLogs: NSWorkspace.shared.open(AppPaths.logs)
+        case .zoomIn: workspace.configuration.fontSize = min(128, workspace.configuration.fontSize + 1)
+        case .zoomOut: workspace.configuration.fontSize = max(8, workspace.configuration.fontSize - 1)
+        case .resetZoom: workspace.configuration.fontSize = 15
+        case .showFonts: showFonts()
+        case .fitHeight: terminalWindow.toggleHeight()
+        case .fullScreen: terminalWindow.window?.toggleFullScreen(nil)
+        case .settings: showSettings(nil)
+        case .hideApp: NSApp.hide(nil)
+        case .quitApp: NSApp.terminate(nil)
+        default: return false
+        }
+        return true
+    }
+
+    func showFonts() {
+        let manager = NSFontManager.shared
+        manager.target = self; manager.action = #selector(changeFont(_:))
+        let config = workspace.configuration
+        manager.setSelectedFont(NSFont(name: config.fontFamily, size: config.fontSize) ?? .monospacedSystemFont(ofSize: config.fontSize, weight: .regular), isMultiple: false)
+        manager.orderFrontFontPanel(self)
+        manager.fontPanel(true)?.makeKeyAndOrderFront(self)
+    }
+
+    @objc func changeFont(_ sender: NSFontManager) {
+        let config = workspace.configuration
+        let font = NSFont(name: config.fontFamily, size: config.fontSize) ?? .monospacedSystemFont(ofSize: config.fontSize, weight: .regular)
+        let selected = sender.convert(font)
+        var next = config
+        next.fontFamily = selected.fontName; next.fontSize = min(128, max(8, selected.pointSize))
+        workspace.configuration = next
+    }
 
     private func buildMenu() {
-        let main = NSMenu()
-        NSApp.mainMenu = main
+        let main = NSMenu(); NSApp.mainMenu = main
         func menu(_ title: String) -> NSMenu {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             let submenu = NSMenu(title: title); item.submenu = submenu; main.addItem(item); return submenu
         }
-        @discardableResult
-        func item(_ menu: NSMenu, _ title: String, _ action: Selector?, _ key: String = "", modifiers: NSEvent.ModifierFlags = .command, target: AnyObject? = nil) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
-            item.keyEquivalentModifierMask = modifiers
-            item.target = target ?? self
-            menu.addItem(item); return item
+        func add(_ action: ShortcutAction, to menu: NSMenu) {
+            let chord = workspace.configuration.binding(for: action)
+            let item = NSMenuItem(title: action.title, action: #selector(runCommand(_:)), keyEquivalent: ShortcutRouter.menuEquivalent(chord))
+            item.keyEquivalentModifierMask = ShortcutRouter.modifiers(chord)
+            item.target = self; item.representedObject = action.rawValue
+            menu.addItem(item); shortcutItems[action] = item
         }
         let app = menu("Terminal2")
-        item(app, "Terminal2 について", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp)
-        item(app, "設定…", #selector(showSettings(_:)), ",")
+        let about = NSMenuItem(title: "Terminal2 について", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        about.target = NSApp; app.addItem(about)
+        add(.settings, to: app)
         app.addItem(.separator())
         let services = NSMenu(title: "サービス")
-        let serviceItem = item(app, "サービス", nil); serviceItem.submenu = services; NSApp.servicesMenu = services
-        app.addItem(.separator())
-        item(app, "Terminal2 を隠す", #selector(NSApplication.hide(_:)), "h", target: NSApp)
-        item(app, "Terminal2 を終了", #selector(NSApplication.terminate(_:)), "q", target: NSApp)
+        let servicesItem = NSMenuItem(title: "サービス", action: nil, keyEquivalent: ""); servicesItem.submenu = services
+        app.addItem(servicesItem); NSApp.servicesMenu = services
+        app.addItem(.separator()); add(.hideApp, to: app); add(.quitApp, to: app)
         let file = menu("ファイル")
-        item(file, "新しいタブ", #selector(newTab(_:)), "t")
-        item(file, "SSH 接続…", #selector(connect(_:)), "s", modifiers: [.command, .shift])
-        item(file, "接続先を選ぶ…", #selector(picker(_:)), "k")
-        file.addItem(.separator())
-        item(file, "タブを閉じる", #selector(closeTab(_:)), "w")
-        item(file, "セッションログを切り替える", #selector(toggleLog(_:)), "l")
-        item(file, "ログを表示", #selector(showLogs(_:)))
+        for action in [ShortcutAction.newTab, .newSSH, .connectionPicker, .closeTab, .toggleLog, .showLogs] { add(action, to: file) }
         let edit = menu("編集")
-        let copy = item(edit, "コピー", #selector(NSText.copy(_:)), "c"); copy.target = nil
-        let paste = item(edit, "ペースト", #selector(NSText.paste(_:)), "v"); paste.target = nil
-        let select = item(edit, "すべて選択", #selector(NSText.selectAll(_:)), "a"); select.target = nil
-        edit.addItem(.separator())
-        item(edit, "検索…", #selector(find(_:)), "f")
+        for action in [ShortcutAction.copy, .paste, .selectAll] { add(action, to: edit) }
+        edit.addItem(.separator()); add(.find, to: edit)
         let view = menu("表示")
-        item(view, "サイドバーを切り替える", #selector(toggleSidebar(_:)), "l", modifiers: [.command, .shift])
-        item(view, "拡大", #selector(zoomIn(_:)), "+")
-        item(view, "縮小", #selector(zoomOut(_:)), "-")
-        item(view, "実際のサイズ", #selector(resetZoom(_:)), "0")
+        for action in [ShortcutAction.toggleSidebar, .showFonts, .zoomIn, .zoomOut, .resetZoom, .fitHeight, .fullScreen] { add(action, to: view) }
         view.addItem(.separator())
-        item(view, "画面の高さに合わせる", #selector(dockHeight(_:)), String(UnicodeScalar(NSF11FunctionKey)!), modifiers: [])
-        item(view, "フルスクリーン", #selector(fullScreen(_:)), "f", modifiers: [.command, .control])
-        view.addItem(.separator())
-        item(view, "履歴を上へ", #selector(historyUp(_:)), String(UnicodeScalar(NSPageUpFunctionKey)!), modifiers: [.shift])
-        item(view, "履歴を下へ", #selector(historyDown(_:)), String(UnicodeScalar(NSPageDownFunctionKey)!), modifiers: [.shift])
-        item(view, "履歴の先頭", #selector(historyTop(_:)), String(UnicodeScalar(NSHomeFunctionKey)!), modifiers: [.command])
-        item(view, "履歴の末尾", #selector(historyBottom(_:)), String(UnicodeScalar(NSEndFunctionKey)!), modifiers: [.command])
-        item(view, "履歴を消去", #selector(clearHistory(_:)), "k", modifiers: [.command, .shift])
-        let window = menu("ウィンドウ")
-        NSApp.windowsMenu = window
-        item(window, "次のタブ", #selector(nextTab(_:)), "]", modifiers: [.command, .shift])
-        item(window, "前のタブ", #selector(previousTab(_:)), "[", modifiers: [.command, .shift])
-        window.addItem(.separator())
-        for index in 0..<9 { item(window, "タブ \(index + 1)", #selector(selectTab(_:)), String(index + 1)).tag = index }
+        for action in [ShortcutAction.historyUp, .historyDown, .historyTop, .historyBottom, .clearHistory] { add(action, to: view) }
+        let window = menu("ウィンドウ"); NSApp.windowsMenu = window
+        add(.nextTab, to: window); add(.previousTab, to: window); window.addItem(.separator())
+        for action in ShortcutAction.allCases where action.tabIndex != nil { add(action, to: window) }
     }
 }
