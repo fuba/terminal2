@@ -27,7 +27,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSTo
         window.title = "Terminal2"
         window.subtitle = "v" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "dev")
         window.minSize = NSSize(width: 720, height: 420)
-        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
         window.toolbarStyle = .unifiedCompact
         window.isReleasedWhenClosed = false
         let toolbar = NSToolbar(identifier: toolbarID)
