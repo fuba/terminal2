@@ -2,6 +2,8 @@
 
 macOS ネイティブのターミナル。[fuba/terminal](https://github.com/fuba/terminal) の機能を、AppKit・SwiftUI・Metal・OpenSSH で実装しています。
 
+ビルド済みの Apple Silicon 向けアプリは [GitHub Releases](https://github.com/fuba/terminal2/releases/latest) からダウンロードできます。
+
 macOS 26 以降、Xcode 26 以降 / Swift 6.2 以降が必要です。開発・検証環境は Apple Silicon、macOS 27、Xcode 27.2 です。
 
 ## ビルドと起動
