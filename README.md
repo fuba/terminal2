@@ -13,12 +13,12 @@ git clone https://github.com/fuba/terminal2.git
 cd terminal2
 swift package resolve
 scripts/build.sh
-open build/Terminal2.app
+open "$HOME/Application/Terminal2.app"
 ```
 
-`build/Terminal2.app` を `~/Applications` または `/Applications` に置いて利用できます。ビルド時に ad hoc 署名を行います。Developer ID 署名・公証は行っていません。
+`scripts/build.sh` は `build/Terminal2.app` を作成し、署名検証後に `~/Application/Terminal2.app` を更新します。ビルド時に ad hoc 署名を行います。Developer ID 署名・公証は行っていません。
 
-`scripts/install.sh` で `~/Applications/Terminal2.app` に配置できます。既存の同名アプリがある場合は前のバンドルを残します。リビルドも別バンドルで行い、起動中のセッションの実行ファイルを上書きしません。
+配布用などで配置を省くには `scripts/build.sh --no-install` を使います。ビルド済みのアプリは `scripts/install.sh` で再配置でき、引数で別の配置先も指定できます。更新時は前のバンドルを残すため、起動中のセッションは続行でき、再起動すると新しいビルドが反映されます。
 
 ```sh
 scripts/test.sh

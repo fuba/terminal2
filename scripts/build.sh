@@ -1,9 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+configuration=release
+case "${1:-}" in debug|release) configuration="$1"; shift ;; esac
+install=true
+if [ "${1:-}" = --no-install ]; then
+    install=false
+    shift
+fi
+if [ "$#" -ne 0 ]; then
+    echo "Usage: scripts/build.sh [debug|release] [--no-install]" >&2
+    exit 2
+fi
 python3 scripts/check-dependencies.py
-configuration="${1:-release}"
-case "$configuration" in debug|release) ;; *) echo "Usage: scripts/build.sh [debug|release]" >&2; exit 2 ;; esac
 swift build -c "$configuration" --disable-automatic-resolution
 binary_dir="$(swift build -c "$configuration" --show-bin-path --disable-automatic-resolution)"
 build_stamp="$(date -u +%Y%m%d%H%M%S)-$$"
@@ -29,4 +38,7 @@ if [ -d build/Terminal2.app ]; then
     mv build/Terminal2.app "build/history/Terminal2-$build_stamp.app"
 fi
 mv "$app" build/Terminal2.app
+if "$install"; then
+    scripts/install.sh >&2
+fi
 echo "$PWD/build/Terminal2.app"
