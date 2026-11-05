@@ -67,3 +67,7 @@
 - `scripts/test.sh` で29テスト成功。依存とアプリコードの変更はなし。
 - `scripts/build.sh release --no-install` で配置済みのアプリが変わらないことを確認。その後の通常ビルドで配置し、署名を検証して、実行ファイルと Info.plist がビルド成果物と一致することを確認。
 - 空白を含む一時パスへ2回配置し、前の実行ファイルの inode が維持されることを確認。署名が壊れたアプリを用いた試験では、更新に失敗しても配置済みのアプリを保持し、一時ファイルを削除した。
+
+## Dock ランチャー（2026-11-06）
+
+`scripts/make-launcher.sh` で署名済みの `~/Applications/Terminal2 Launcher.app` を作成。Finder から開き、`~/Applications/Terminal2.app` の実行ファイルが起動することをプロセスのパスで確認した。Finder から Dock に追加し、ランチャーのパスが固定項目として保存されたことを確認した。本体のコードと依存は変更していない。

@@ -20,6 +20,8 @@ open "$HOME/Applications/Terminal2.app"
 
 配布用などで配置を省くには `scripts/build.sh --no-install` を使います。ビルド済みのアプリは `scripts/install.sh` で再配置でき、引数で別の配置先も指定できます。更新時は前のバンドルを残すため、起動中のセッションは続行でき、再起動すると新しいビルドが反映されます。
 
+Dock から起動するには、初回に `scripts/make-launcher.sh` を実行し、できた `~/Applications/Terminal2 Launcher.app` を [Dock に追加](https://support.apple.com/guide/mac-help/mh35859/mac) します。ランチャーはクリックするたびに `~/Applications/Terminal2.app` を開きます。ビルドで本体を更新しても、ランチャーを追加し直す必要はありません。
+
 ```sh
 scripts/test.sh
 scripts/run.sh              # Debug build and launch
