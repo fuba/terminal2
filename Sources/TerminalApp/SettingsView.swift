@@ -23,7 +23,7 @@ struct SettingsView: View {
                 }
                 Section("ウィンドウ") {
                     HStack {
-                        Text("不透明度")
+                        Text("端末背景の不透明度")
                         Slider(value: $workspace.configuration.opacity, in: 0.35...1)
                         Text("\(Int(workspace.configuration.opacity * 100))%").monospacedDigit().frame(width: 42)
                     }
