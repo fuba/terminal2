@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -d build/Terminal2.app ] || scripts/build.sh release --no-install
-destination="${1:-$HOME/Application}"
+destination="${1:-$HOME/Applications}"
 mkdir -p "$destination"
 stage_dir="$(mktemp -d "$destination/.Terminal2-install.XXXXXX")"
 trap 'rm -rf "$stage_dir"' EXIT
