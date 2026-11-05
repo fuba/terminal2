@@ -203,7 +203,6 @@ struct SessionPane: View {
         VStack(spacing: 0) {
             if workspace.showingSearch { SearchBar(session: session, workspace: workspace, close: { workspace.showingSearch = false; workspace.focusSelected() }) }
             TerminalSurface(session: session, configuration: workspace.configuration)
-                .padding(.leading, 10).padding(.top, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(spacing: 12) {
                 Image(systemName: session.running ? session.target.symbol : "stop.circle").foregroundStyle(.secondary)
@@ -219,6 +218,7 @@ struct SessionPane: View {
                 Text("\(session.columns) × \(session.rows)").monospacedDigit().foregroundStyle(.secondary)
             }
             .font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 7)
+            .background(.bar)
         }
         .onAppear { updateTitle() }
         .onChange(of: session.title) { _, _ in updateTitle() }

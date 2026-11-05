@@ -49,9 +49,28 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSTo
     func applyAppearance() {
         guard let window else { return }
         window.isOpaque = workspace.configuration.opacity == 1
-        window.backgroundColor = window.isOpaque ? NSColor(hex: workspace.configuration.background) : .clear
         window.appearance = NSAppearance(named: NSColor(hex: workspace.configuration.background).isLight ? .aqua : .darkAqua)
         connectionPanel?.appearance = window.appearance
+        updateWindowBackground()
+    }
+
+    private func updateWindowBackground() {
+        guard let window else { return }
+        let terminalColor = NSColor(hex: workspace.configuration.background)
+        if window.isOpaque {
+            window.backgroundColor = terminalColor
+            return
+        }
+        let size = NSSize(width: 1, height: window.frame.height)
+        let titlebarBase = window.contentLayoutRect.maxY
+        let titlebarColor = NSColor(hex: terminalColor.isLight ? "#F0F0F0" : "#2B2B2B")
+        // Tile a single column horizontally, with an opaque strip above the content.
+        let backing = NSImage(size: size, flipped: false) { bounds in
+            titlebarColor.setFill()
+            NSRect(x: 0, y: titlebarBase, width: bounds.width, height: max(0, bounds.height - titlebarBase)).fill()
+            return true
+        }
+        window.backgroundColor = NSColor(patternImage: backing)
     }
     func resizeToGrid() {
         guard let window, let session = workspace.selected else { return }
@@ -113,7 +132,11 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSTo
         positionSidebar()
     }
     func windowDidMove(_ notification: Notification) { positionSidebar(); savePosition() }
-    func windowDidResize(_ notification: Notification) { positionSidebar(); savePosition() }
+    func windowDidResize(_ notification: Notification) {
+        if window?.isOpaque == false { updateWindowBackground() }
+        positionSidebar()
+        savePosition()
+    }
     func windowDidChangeScreen(_ notification: Notification) { if docked { snapHeight() }; positionSidebar(); savePosition() }
     func windowShouldClose(_ sender: NSWindow) -> Bool { sender.orderOut(nil); return false }
     func windowWillEnterFullScreen(_ notification: Notification) {

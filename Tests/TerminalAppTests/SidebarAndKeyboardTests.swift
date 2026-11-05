@@ -37,6 +37,45 @@ final class SidebarAndKeyboardTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
         window.delegate = nil; window.close()
     }
+
+    @MainActor
+    func testTranslucentTerminalFillsWindowWidthBelowOpaqueTitlebar() async throws {
+        _ = NSApplication.shared
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let workspace = Workspace(configurationURL: folder.appendingPathComponent("config.json"))
+        defer { workspace.shutdown() }
+        workspace.configuration.opacity = 0.55
+        workspace.configuration.useMetal = false
+        workspace.open(.command("Layout", "true"))
+        let controller = TerminalWindowController(workspace: workspace)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.delegate = nil; window.close() }
+        let content = try XCTUnwrap(window.contentView)
+        let terminal = try XCTUnwrap(workspace.selected?.terminal)
+        for size in [NSSize(width: 800, height: 480), NSSize(width: 950, height: 620)] {
+            window.setContentSize(size)
+            content.layoutSubtreeIfNeeded()
+            let rect = terminal.convert(terminal.bounds, to: content)
+            XCTAssertTrue(terminal.window === window)
+            XCTAssertEqual(rect.minX, content.bounds.minX, accuracy: 0.5)
+            XCTAssertEqual(rect.maxX, content.bounds.maxX, accuracy: 0.5)
+            XCTAssertEqual(terminal.backgroundOpacity, 0.55, accuracy: 0.001)
+
+            let height = Int(window.frame.height.rounded())
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: height,
+                                                       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                       colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            window.backgroundColor.setFill()
+            NSRect(x: 0, y: 0, width: 1, height: height).fill(using: .copy)
+            NSGraphicsContext.restoreGraphicsState()
+            XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 0, y: 10)).alphaComponent, 1)
+            XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 0, y: height / 2)).alphaComponent, 0)
+        }
+    }
     func testSidecarNeverOverlapsTerminalAndPreservesSizeWhenItFits() {
         let screen = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         for x in [0.0, 300, 1000] {
